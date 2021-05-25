@@ -30,12 +30,17 @@ venv*/
 *.egg-info/
 dist/
 .pytest_cache/
+.cache
+.idea
 
 # Editors
 .vscode/
 
 # OS
 .DS_Store
+
+# backup
+backup/s
 
 Makefile
 Makefile_backup
