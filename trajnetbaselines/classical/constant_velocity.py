@@ -6,8 +6,8 @@ def predict(input_paths, predict_all=True, n_predict=12, obs_length=9):
     pred_length = n_predict
 
     xy = trajnetplusplustools.Reader.paths_to_xy(input_paths)
-    curr_position = xy[-1]
-    curr_velocity = xy[-1] - xy[-2]
+    curr_position = xy[obs_length-1]
+    curr_velocity = xy[obs_length-1] - xy[obs_length-2]
     output_rel_scenes = np.array([i * curr_velocity for i in range(1, n_predict+1)])
     output_scenes = curr_position + output_rel_scenes
 
