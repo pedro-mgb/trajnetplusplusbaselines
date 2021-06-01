@@ -4,7 +4,7 @@ import argparse
 
 import pickle
 from joblib import Parallel, delayed
-import scipy
+import numpy as np
 
 import trajnetplusplustools
 import evaluator.write as write
@@ -137,9 +137,11 @@ class TrajnetEvaluator:
                 ## Collision in Predictions
                 # [Col-I] only if neighs in gt = neighs in prediction
                 num_gt_neigh = len(ground_truth) - 1
-                num_predicted_neigh = len(neighbours_tracks)
+                # some methods (like constant velocity) seem to output some empty
+                num_predicted_neigh = len([t for t in neighbours_tracks if len(t) > 0])
+                # num_predicted_neigh = len(neighbours_tracks)
                 if num_gt_neigh != num_predicted_neigh:
-                    self.enable_col1 = False
+                    self.enable_col1 = True
                     for key in score:
                         score[key][4] = 0
                         score[key][3] = 0
@@ -366,17 +368,41 @@ def main():
                         help='consider kalman in evaluation')
     parser.add_argument('--cv', action='store_true',
                         help='consider constant velocity in evaluation')
+    parser.add_argument('--cv2', action='store_true',
+                        help='consider constant velocity using past 2 velocities (v_1 at time t, v_2 at time t+1 , '
+                             'v_1 at time t+2, and so on) in evaluation')
+    parser.add_argument('--cs_va', action='store_true',
+                        help='consider constant speed (module), but varying angle (direction)')
+    parser.add_argument('--rp', action='store_true',
+                        help='consider model that replicates past')
+    parser.add_argument('--rp_s', action='store_true',
+                        help='consider model that replicates past and performing symmetric along either x or y '
+                             '(the dimension that has smaller velocity contribution)')
+    parser.add_argument('--rp_c', action='store_true',
+                        help='consider model that replicates past, with choice between rp and rp_s')
+    parser.add_argument('--ls_cf', action='store_true',
+                        help='consider a curve generation model based on circle fitting with least squares')
+    parser.add_argument('--cp', action='store_true',
+                        help='consider constant position in evaluation')
+    parser.add_argument('--ca', action='store_true',
+                        help='consider constant acceleration in evaluation')
+    parser.add_argument('--aftp', action='store_true',
+                        help='consider Arc-Fit and Tangent-Prediction in evaluation')
     parser.add_argument('--normalize_scene', action='store_true',
                         help='augment scenes')
     parser.add_argument('--modes', default=1, type=int,
                         help='number of modes to predict')
+    parser.add_argument('--no_parallel', action='store_true', help='do not parallelize the evaluation (this is '
+                                                                   'particular useful for Windows)')
     args = parser.parse_args()
 
-    scipy.seterr('ignore')
+    np.seterr('ignore')
 
     args.output = args.output if args.output is not None else []
     ## assert length of output models is not None
-    if (not args.sf) and (not args.orca) and (not args.kf) and (not args.cv):
+    if (not args.sf) and (not args.orca) and (not args.kf) and (not args.cv) and (not args.cp) and (not args.ca) and \
+            (not args.aftp) and (not args.cv2) and (not args.cs_va) and (not args.ls_cf) and (not args.rp) \
+            and (not args.rp_s) and (not args.rp_c):
         assert len(args.output), 'No output file is provided'
 
     ## Path to the data folder name to predict
@@ -439,8 +465,11 @@ def main():
             #             eval(true_datasets[i], submit_datasets[i], args)
             #            for i in range(len(true_datasets))}
 
-            results_list = Parallel(n_jobs=4)(delayed(eval)(true_datasets[i], submit_datasets[i], args)
-                                              for i in range(len(true_datasets)))
+            if args.no_parallel:
+                results_list = [eval(true_datasets[i], submit_datasets[i], args) for i in range(len(true_datasets))]
+            else:
+                results_list = Parallel(n_jobs=4)(delayed(eval)(true_datasets[i], submit_datasets[i], args)
+                                                  for i in range(len(true_datasets)))
             results = {submit_datasets[i].replace(args.path, '').replace('.ndjson', ''): results_list[i]
                        for i in range(len(true_datasets))}
 
