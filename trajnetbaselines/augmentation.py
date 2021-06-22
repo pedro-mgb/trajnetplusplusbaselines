@@ -48,7 +48,7 @@ def shift(xy, center):
     xy = xy - center[numpy.newaxis, numpy.newaxis, :]
     return xy
 
-def center_scene(xy, obs_length=9, ped_id=0):
+def center_scene(xy, obs_length=9, ped_id=0, offset=numpy.pi/2):
     ## Center
     center = xy[obs_length-1, ped_id] ## Last Observation
     xy = shift(xy, center)
@@ -57,7 +57,7 @@ def center_scene(xy, obs_length=9, ped_id=0):
     second_last_obs = xy[obs_length-2, ped_id]
     diff = numpy.array([last_obs[0] - second_last_obs[0], last_obs[1] - second_last_obs[1]])
     thet = numpy.arctan2(diff[1], diff[0])
-    rotation = -thet + numpy.pi/2
+    rotation = -thet + offset
     xy = theta_rotation(xy, rotation)
     return xy, rotation, center
 

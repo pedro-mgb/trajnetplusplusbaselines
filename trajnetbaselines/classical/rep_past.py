@@ -64,9 +64,12 @@ def predict_choice(input_paths, predict_all=True, n_predict=12, obs_length=9):
     curr_position = xy[obs_length - 1]
     all_velocities = xy[1:obs_length] - xy[:obs_length - 1]
     all_velocities_mean = np.mean(all_velocities, axis=0)
-    all_velocity_angles = np.arctan2(all_velocities[:, :, 1], all_velocities[:, :, 0])
+    # unwrap is used to make sure we don't get huge differences between angles that are technically close (e.g. an
+    #   angle close to pi and another close to -pi)
+    all_velocity_angles = np.unwrap(np.arctan2(all_velocities[:, :, 1], all_velocities[:, :, 0]), axis=0)
+    angle_vars = all_velocity_angles[1:, :] - all_velocity_angles[:-1, :]
     num_vels = all_velocity_angles.shape[0]  # length in time of the velocities
-    angles_half1, angles_half2 = all_velocity_angles[:int(num_vels / 2)], all_velocity_angles[int(num_vels / 2):]
+    angles_half1, angles_half2 = angle_vars[:int(num_vels / 2) - 1], angle_vars[int(num_vels / 2) - 1:]
     avg_angles_half1, avg_angles_half2 = np.mean(angles_half1, axis=0), np.mean(angles_half2, axis=0)
     output_scenes = np.full((n_predict, curr_position.shape[0], curr_position.shape[1]), float('nan'))
     rp_pred = predict(input_paths, predict_all, n_predict, obs_length)
@@ -78,15 +81,18 @@ def predict_choice(input_paths, predict_all=True, n_predict=12, obs_length=9):
     for person in range(xy.shape[1]):
         range_distance_xy = np.abs(all_velocities_mean[person, 0] / all_velocities_mean[person, 1])
         range_angles = np.abs(avg_angles_half2[person] / avg_angles_half1[person])
+        range_angles_no_abs = avg_angles_half2[person] / avg_angles_half1[person]
         if range_angles > 2.0 or range_angles < 0.5:  # TODO fix this condition?
             """
             and \
                 (range_distance_xy > 2 or range_distance_xy < 0.5):"""
-            print("SYM")
+            if person == 0:
+                print("SYM")
             #  an extra path is sent because models expect more than one
             output_scenes[:, person, :] = rp_sym_pred[:, person, :]
         else:
-            print("Regular")
+            if person == 0:
+                print("Regular")
             #  an extra path is sent because models expect more than one
             output_scenes[:, person, :] = rp_pred[:, person, :]
     output_primary = output_scenes[-n_predict:, 0]
@@ -94,3 +100,4 @@ def predict_choice(input_paths, predict_all=True, n_predict=12, obs_length=9):
     # Unimodal Prediction
     multimodal_outputs[0] = output_primary, output_neighs
     return multimodal_outputs
+

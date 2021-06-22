@@ -8,3 +8,4 @@ from .constant_acceleration import predict
 from .ls_circle import predict
 from .aftp import predict
 from .rep_past import predict, predict_sym, predict_choice
+from .objective_fit import predict

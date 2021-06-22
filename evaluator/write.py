@@ -26,6 +26,9 @@ def process_scene(predictor, model_name, paths, scene_goal, args):
             ('cs_va' in model_name) or ('cp' in model_name) or ('ca' in model_name) or ('aftp' in model_name) or \
             ('ls_cf' in model_name) or ('rp' in model_name) or ('rp_sym' in model_name) or ('rp_choice' in model_name):
         predictions = predictor(paths, n_predict=args.pred_length, obs_length=args.obs_length)
+    elif 'obj' in model_name:
+        predictions = predictor(paths, n_predict=args.pred_length, obs_length=args.obs_length, obj=args.objective,
+                                norm=args.normalize_scene)
     else:
         predictions = predictor(paths, scene_goal, n_predict=args.pred_length, obs_length=args.obs_length,
                                 modes=args.modes, args=args)
@@ -52,6 +55,8 @@ def main(args=None):
         args.output.append(os.path.sep + 'cv.pkl')
     if args.cs_va:
         args.output.append(os.path.sep + 'cs_va.pkl')
+    if args.fit_objective:
+        args.output.append(os.path.sep + 'fit_obj.pkl')
     if args.rp:
         args.output.append(os.path.sep + 'rp.pkl')
     if args.rp_s:
@@ -120,6 +125,9 @@ def main(args=None):
             elif 'ls_cf' in model_name:
                 print("LSCF (Least Squares Circle Fit) based model")
                 predictor = trajnetbaselines.classical.ls_circle.predict
+            elif 'obj' in model_name:
+                print("Fit to objective function model")
+                predictor = trajnetbaselines.classical.objective_fit.predict
             elif 'cv2' in model_name:
                 print("CV2 (using past 2 positions)")
                 predictor = trajnetbaselines.classical.constant_velocity.predict_prior2

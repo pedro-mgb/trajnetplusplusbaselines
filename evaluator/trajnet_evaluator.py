@@ -373,6 +373,11 @@ def main():
                              'v_1 at time t+2, and so on) in evaluation')
     parser.add_argument('--cs_va', action='store_true',
                         help='consider constant speed (module), but varying angle (direction)')
+    parser.add_argument('--fit_objective', action='store_true',
+                        help='consider model that fits trajectory data to a certain objective function')
+    parser.add_argument('--objective', type=str, default='linear',
+                        choices=['linear', 'quad', 'sin', 'cos'],
+                        help='type of objective function to fit (use with --fit_objective)')
     parser.add_argument('--rp', action='store_true',
                         help='consider model that replicates past')
     parser.add_argument('--rp_s', action='store_true',
@@ -402,7 +407,7 @@ def main():
     ## assert length of output models is not None
     if (not args.sf) and (not args.orca) and (not args.kf) and (not args.cv) and (not args.cp) and (not args.ca) and \
             (not args.aftp) and (not args.cv2) and (not args.cs_va) and (not args.ls_cf) and (not args.rp) \
-            and (not args.rp_s) and (not args.rp_c):
+            and (not args.rp_s) and (not args.rp_c) and (not args.fit_objective):
         assert len(args.output), 'No output file is provided'
 
     ## Path to the data folder name to predict
