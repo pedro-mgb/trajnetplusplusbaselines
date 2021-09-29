@@ -16,7 +16,7 @@ class GridBasedPooling(torch.nn.Module):
     def __init__(self, cell_side=2.0, n=4, hidden_dim=128, out_dim=None,
                  type_='occupancy', pool_size=1, blur_size=1, front=False,
                  embedding_arch='one_layer', pretrained_pool_encoder=None,
-                 constant=0, norm=0, layer_dims=None, latent_dim=16):
+                 constant=0, norm=0, layer_dims=None, latent_dim=16, extra_args=None):
         """
         Pools in a grid of size 'n * cell_side' centred at the ped location
         cell_side: Scalar
@@ -37,8 +37,23 @@ class GridBasedPooling(torch.nn.Module):
             background values of pooling grid
         norm: Scalar 
             normalization scheme of pool grid [Default: None]
+        extra_args: dictionary
+            contains other arguments not present in original Trajnet++ model, such as the use of arc pooling
         """
         super(GridBasedPooling, self).__init__()
+
+        if extra_args is None:
+            self.arc = False
+            self.arc_radius = self.arc_angle = self.n_r = self.n_a = None
+            self.include_occ = False
+        else:
+            self.arc = extra_args.type == 'arc'
+            if self.arc:
+                self.arc_radius, self.arc_angle = extra_args.arc_radius, extra_args.arc_angle
+                self.n_r, self.n_a = extra_args.n_r, extra_args.n_a
+            else:
+                self.arc_radius = self.arc_angle = self.n_r = self.n_a = None
+            self.include_occ = extra_args.variable_shape
         self.cell_side = cell_side
         self.n = n
         self.type_ = type_
@@ -55,7 +70,7 @@ class GridBasedPooling(torch.nn.Module):
 
         ## Type of pooling
         self.pooling_dim = 1
-        if self.type_ == 'directional':
+        if self.type_ == 'directional' or self.arc:
             self.pooling_dim = 2
         if self.type_ == 'social':
             ## Encode hidden-dim into latent-dim vector (faster computation)
@@ -146,12 +161,14 @@ class GridBasedPooling(torch.nn.Module):
         ## Make chosen grid
         if self.type_ == 'occupancy':
             grid = self.occupancies(obs1, obs2)
-        elif self.type_ == 'directional':
+        elif self.type_ == 'directional' or self.arc:
             grid = self.directional(obs1, obs2)
         elif self.type_ == 'social':
             grid = self.social(hidden_state, obs1, obs2)
         elif self.type_ == 'dir_social':
             grid = self.dir_social(hidden_state, obs1, obs2)
+        else:
+            raise Exception('TYPE NOT AVAILABLE')
 
         ## Forward Grid
         return self.forward_grid(grid)
@@ -167,7 +184,7 @@ class GridBasedPooling(torch.nn.Module):
 
         ## if only primary pedestrian present
         if num_tracks == 1:
-            return self.occupancy(obs2, None)
+            return self.arc_pooling(obs2) if self.arc else self.occupancy(obs2, None)
 
         ## Generate values to input in directional grid tensor (relative velocities in this case) 
         vel = obs2 - obs1
@@ -178,8 +195,13 @@ class GridBasedPooling(torch.nn.Module):
         ## [num_tracks, num_tracks, 2] --> [num_tracks, num_tracks-1, 2]
         relative = relative[~torch.eye(num_tracks).bool()].reshape(num_tracks, num_tracks-1, 2)
 
-        ## Generate Occupancy Map
-        return self.occupancy(obs2, relative, past_obs=obs1)
+        if self.arc:
+            ## Generate Occupancy Map with ARC
+            angle_vel = torch.atan2(vel[:, 1], vel[:, 0])
+            return self.arc_pooling(obs2, relative, angle_offsets=angle_vel)
+        else:
+            ## Generate Occupancy Map with GRID
+            return self.occupancy(obs2, relative, past_obs=obs1)
 
     def social(self, hidden_state, obs1, obs2):
         ## Makes the Social Grid
@@ -317,18 +339,106 @@ class GridBasedPooling(torch.nn.Module):
         # occ_summed = torch.nn.functional.avg_pool2d(occ_blurred, self.pool_size)  # faster?
         return occ_summed
 
+    def arc_pooling(self, obs, other_values=None, angle_offsets=None):
+        """
+
+        :param obs:
+        :param other_values:
+        :param angle_offsets:
+        :return:
+        """
+        num_peds = obs.size(0)
+        # mask unseen values (the calling model should take care of this, but this is just a safe-guard)
+        obs[torch.any(torch.isnan(obs), dim=1)] = 0
+        # if only one pedestrian is present
+        if num_peds == 1:
+            # return self.constant * torch.ones(1, self.pooling_dim, self.n_r, self.n_a, device=obs.device)
+            # note the line below may be used if variable shape LSTM network is employed
+            ''', torch.zeros(1, 1, self.n_r, self.n_a, device=obs.device) if self.include_occ else None '''
+            return torch.zeros(1, self.pooling_dim, self.n_r, self.n_a, device=obs.device)
+        # Get relative position of the pedestrians
+        # [num_peds, 2] --> [num_peds, num_peds, 2]
+        unfolded = obs.unsqueeze(0).repeat(obs.size(0), 1, 1)
+        relative_cart = unfolded - obs.unsqueeze(1)
+        # convert to polar coordinates 0<->radius, 1<->angle
+        relative = torch.cat((torch.norm(relative_cart, dim=2, keepdim=True),
+                              torch.atan2(relative_cart[:, :, 1], relative_cart[:, :, 0]).unsqueeze(2)), dim=2)
+        # subtract the angle offsets (so that the angles are in accordance with pedestrian's gaze direction)
+        relative[:, :, 1] -= angle_offsets.unsqueeze(1).repeat(1, obs.size(0))
+        # Deleting Diagonal (to not consider a pedestrian with respect to itself)
+        # [num_peds, num_peds, 2] --> [num_peds, num_peds-1, 2]
+        relative = relative[~torch.eye(num_peds).bool()].reshape(num_peds, num_peds - 1, 2)
+        # normalize angle values in [-pi, pi) interval
+        relative[:, :, 1] = (relative[:, :, 1] + np.pi) % (2 * np.pi) - np.pi
+        if other_values is None:  # In case of 'occupancy' pooling
+            other_values = torch.ones(num_peds, num_peds - 1, self.pooling_dim, device=obs.device)
+        # force use of standard occupancy to facilitate some operations
+        other_values_o = torch.ones(num_peds, num_peds - 1, 1, device=obs.device) if self.include_occ else None
+        oij = torch.zeros_like(relative)
+        if not hasattr(self, 'shape_values') or self.shape_values.all_radius is None or \
+                self.shape_values.all_angles is None:
+            all_radius = torch.ones_like(oij[:, :, 0]) * self.arc_radius
+            all_angles = torch.ones_like(oij[:, :, 0]) * self.arc_angle
+        else:
+            # use existing supplied values for an exterior configuration (most likely from ShapeConfigLSTM)
+            all_radius = self.shape_values.all_radius.unsqueeze(1).repeat(1, num_peds - 1)
+            all_angles = self.shape_values.all_angles.unsqueeze(1).repeat(1, num_peds - 1)
+        oij[:, :, 0] = relative[:, :, 0] / all_radius * self.n_r
+        oij[:, :, 1] = self.n_a / 2.0 * (relative[:, :, 1] / (all_angles / 2) + 1)
+        # if range_no_violations has 0 value - index is good (neighbour in a specific cell)
+        range_no_violations = torch.zeros_like(oij)
+        range_no_violations[:, :, 0] = (oij[:, :, 0] < 0) + (oij[:, :, 0] >= self.n_r)
+        range_no_violations[:, :, 1] = (oij[:, :, 1] < 0) + (oij[:, :, 1] >= self.n_a)
+        range_mask = torch.sum(range_no_violations, dim=2) == 0
+        range_mask_full = range_mask
+        # range_mask == False -> outside of shape - will not count for pooling
+        oij[~range_mask_full] = 0
+        other_values[~range_mask_full] = 0
+        if self.include_occ:
+            other_values_o[~range_mask_full] = 0
+        # other_values[~range_mask] = self.constant # self.constant = 0 by default; not implemented here
+        oij = oij.long()
+        # Flatten - numbering goes across the same radius, and going counter-clockwise (neg to pos) in angle
+        oi = oij[:, :, 0] * self.n_a + oij[:, :, 1]
+        # faster occupancy
+        occ = torch.zeros(num_peds, self.n_a * self.n_r, self.pooling_dim, device=obs.device)
+        occ_o = torch.zeros(num_peds, self.n_a * self.n_r, 1, device=obs.device) if self.include_occ else None
+        # occ = self.constant*torch.ones(num_tracks, self.n**2 * self.pool_size**2, self.pooling_dim, device=obs.device)
+        # Fill occupancy map with attributes - sum for elements in the same cell
+        for i in range(num_peds):
+            # use index_add_ so that values of multiple agents can be accumulated on the same cell
+            # this requires the indexes to be one-dimensional, hence the above for loop
+            occ[i].index_add_(0, oi[i], other_values[i])
+            if self.include_occ:
+                occ_o[i].index_add_(0, oi[i], other_values_o[i])
+        if self.normalize:
+            occ /= torch.clamp(torch.sum(occ, dim=1), min=1).unsqueeze(1).repeat(1, occ.shape[1], 1)
+        if self.include_occ:
+            occ_o /= torch.clamp(torch.sum(occ_o, dim=1), min=1).unsqueeze(1).repeat(1, occ_o.shape[1], 1)
+        occ, occ_o = torch.transpose(occ, 1, 2), torch.transpose(occ_o, 1, 2) if self.include_occ else None
+        occ_2d, occ_o_2d = occ.view(num_peds, -1, self.n_r, self.n_a), \
+                           occ_o.view(num_peds, -1, self.n_r, self.n_a) if self.include_occ else None
+        occ_summed = torch.nn.functional.lp_pool2d(occ_2d, 1, self.pool_size)
+        return occ_summed
+
+    def __init_input_dim__(self, input_dim):
+        if input_dim is None:
+            if self.arc:
+                input_dim = self.n_r * self.n_a * self.pooling_dim
+            else:
+                input_dim = self.n * self.n * self.pooling_dim
+        return input_dim
+
     ## Architectures of Encoding Grid
     def one_layer(self, input_dim=None):
-        if input_dim is None:
-            input_dim = self.n * self.n * self.pooling_dim
+        input_dim = self.__init_input_dim__(input_dim)
         return  torch.nn.Sequential(
             torch.nn.Linear(input_dim, self.out_dim),
             torch.nn.ReLU(),)
 
     ## Default Layer Dims: 1024
     def two_layer(self, input_dim=None, layer_dims=None):
-        if input_dim is None:
-            input_dim = self.n * self.n * self.pooling_dim
+        input_dim = self.__init_input_dim__(input_dim)
         return  torch.nn.Sequential(
             torch.nn.Linear(input_dim, layer_dims[0]),
             torch.nn.ReLU(),
@@ -337,8 +447,7 @@ class GridBasedPooling(torch.nn.Module):
 
     ## Default Layer Dims: 1024, 512
     def three_layer(self, input_dim=None, layer_dims=None):
-        if input_dim is None:
-            input_dim = self.n * self.n * self.pooling_dim
+        input_dim = self.__init_input_dim__(input_dim)
         return  torch.nn.Sequential(
             torch.nn.Linear(input_dim, layer_dims[0]),
             torch.nn.ReLU(),

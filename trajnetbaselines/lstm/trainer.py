@@ -343,8 +343,8 @@ def main(epochs=25):
                         help='flag to consider goals of pedestrians')
     parser.add_argument('--loss', default='pred', choices=('L2', 'pred'),
                         help='loss objective, L2 loss (L2) and Gaussian loss (pred)')
-    parser.add_argument('--type', default='vanilla',
-                        choices=('vanilla', 'occupancy', 'directional', 'social', 'hiddenstatemlp', 's_att_fast',
+    parser.add_argument('--type', default='vanilla',  # arc is the same as directional, but uses FOV instead of arc
+                        choices=('vanilla', 'occupancy', 'directional', 'arc', 'social', 'hiddenstatemlp', 's_att_fast',
                                  'directionalmlp', 'nn', 'attentionmlp', 'nn_lstm', 'traj_pool', 'nmmp', 'dir_social'),
                         help='type of interaction encoder')
     parser.add_argument('--sample', default=1.0, type=float,
@@ -385,6 +385,14 @@ def main(epochs=25):
                                  help='cell size of real world (in m) for grid-based pooling')
     hyperparameters.add_argument('--n', type=int, default=12,
                                  help='number of cells per side for grid-based pooling')
+    hyperparameters.add_argument('--arc_radius', type=float, default=4,
+                                 help='radius for arc-directional pooling, in m')
+    hyperparameters.add_argument('--arc_angle', type=float, default=140,
+                                 help='angle (or spread) for arc-directional pooling, in degrees')
+    hyperparameters.add_argument('--n_r', type=int, default=4,
+                                 help='number of cells over radius for arc-based pooling')
+    hyperparameters.add_argument('--n_a', type=int, default=5,
+                                 help='number of cells over angle for arc-based pooling')
     hyperparameters.add_argument('--layer_dims', type=int, nargs='*', default=[512],
                                  help='interaction module layer dims for gridbased pooling')
     hyperparameters.add_argument('--embedding_arch', default='one_layer',
@@ -399,6 +407,68 @@ def main(epochs=25):
                                  help='latent dimension of encoding hidden dimension during social pooling')
     hyperparameters.add_argument('--norm', default=0, type=int,
                                  help='normalization scheme for input batch during grid-based pooling')
+    parser.add_argument('--variable_shape', action='store_true',
+                        help='Do a variable pooling shape, based on the past interactions between pedestrians '
+                             '(if \'--pooling_type\' was supplied)')
+    parser.add_argument('--radius_values', type=float, nargs='+', default=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+                        help='List of radius values (units of the scene - metres or pixels) that are possible to use. '
+                             'It does not have to be supplied in a particular order.')
+    parser.add_argument('--angle_values', type=float, nargs='+',
+                        default=[45, 60, 75, 90, 105, 120, 135, 150, 165, 180],
+                        help='List of angle values (degrees) that are possible to use. They should be supplied in '
+                             '(0, 360] interval. It does not have to be supplied in a particular order.')
+    parser.add_argument('--cell_side_values', type=float, nargs='+', default=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+                        help='List of cell side values (units of the scene - metres or pixels) that are possible to '
+                             'use. It does not have to be supplied in a particular order.')
+    parser.add_argument('--random_init_shape', action='store_true',
+                        help='If, at first instant, meant to randomly initialize the shape with one of the possible '
+                             'values (radius/angle in case of arc, cell side in case of grid)')
+    parser.add_argument('--variable_shape_ped_density', action='store_true',
+                        help='have the pooling shape be a function of the number of pedestrians currently present at '
+                             'that instant. More pedestrians = smaller shape; less pedestrians = larger shape. Limits '
+                             'of shape provided by the extremities of arguments --radius_values and --angle_values in '
+                             'case of arc shape, or --cell_side_values in case of grid shape. This cannot be used '
+                             'simultaneously with --variable_shape argument, nor with --variable_shape_neigh_dist.')
+    parser.add_argument('--variable_shape_ped_density_visible', action='store_true',
+                        help='have the pooling shape be a function of the number of pedestrians currently present at '
+                             'that instant, but only accounts the visible pedestrians. Similar to '
+                             '--variable_shape_ped_density, but only for arc shape, and using fixed angle (with '
+                             'argument --arc_angle), only radius can be varied using the extremities of argument '
+                             '--radius_values. This cannot be used simultaneously with --variable_shape argument, '
+                             'nor with --variable_shape_ped_density, nor --variable_shape_neigh_dist.')
+    parser.add_argument('--max_num_peds', default=100, type=int,
+                        help='Specific to --variable_shape_ped_density_visible and  argument. '
+                             'For the current instant, any number of pedestrians equal or larger than this value will '
+                             'map to the minimum shape dimensions provided.')
+    parser.add_argument('--variable_shape_neigh_dist', action='store_true',
+                        help='have the pooling shape be a function of mean distance of neighbours to the pedestrian '
+                             'that instant. Closer neighbours = smaller shape; distant neighbours = larger shape. '
+                             'Limits of shape provided by the extremities of arguments --radius_values and '
+                             '--angle_values in case of arc shape, or --cell_side_values in case of grid shape. This '
+                             'cannot be used simultaneously with --variable_shape argument, nor with '
+                             '--variable_shape_ped_density.')
+    parser.add_argument('--variable_shape_neigh_dist_visible', action='store_true',
+                        help='have the pooling shape be a function of mean distance of neighbours to the pedestrian '
+                             'that instant, but only applying for those that the pedestrian can see. '
+                             'Closer neighbours = smaller shape; distant neighbours = larger shape. '
+                             'Limits of shape provided by the extremities of arguments --radius_values, with fixed '
+                             'value for angle via --arc_angle (only applies for arc shape) This cannot be used '
+                             'simultaneously with any other variable shape arguments.')
+    parser.add_argument('--min_neigh_dist', default=1, type=float,
+                        help='Specific to --variable_shape_neigh_dist argument. For the current instant, any case where'
+                             ' the mean neighbour distance is smaller or equal to this value will map to the minimum '
+                             'shape dimensions provided.')
+    parser.add_argument('--max_neigh_dist', default=6, type=float,
+                        help='Specific to --variable_shape_neigh_dist argument. For the current instant, any case where'
+                             ' the mean neighbour distance is larger or equal to this value will map to the maximum '
+                             'shape dimensions provided.')
+    parser.add_argument('--variable_shape_up_to_x_ped', action='store_true',
+                        help='The pooling shape will grow to include up to --max_num_ped pedestrians (best no used the '
+                             'default value. You can use for instance values like 10 or 15). For the case of grid, its'
+                             'size will increase until the maximum specified by --grid_dim times --cell_side_values. '
+                             'For the case of arc, the radius will grow up to the maximum of --radius_values (arc '
+                             'angle will be fixed to --arc_angle value). Cannot be used with any other of the '
+                             '--variable_shape(...) arguments')
 
     ## Non-Grid-based pooling
     hyperparameters.add_argument('--no_vel', action='store_true',
@@ -498,7 +568,7 @@ def main(epochs=25):
                                 cell_side=args.cell_side, n=args.n, front=args.front,
                                 out_dim=args.pool_dim, embedding_arch=args.embedding_arch,
                                 constant=args.pool_constant, pretrained_pool_encoder=pretrained_pool,
-                                norm=args.norm, layer_dims=args.layer_dims, latent_dim=args.latent_dim)
+                                norm=args.norm, layer_dims=args.layer_dims, latent_dim=args.latent_dim, extra_args=args)
 
     # create forecasting model
     model = LSTM(pool=pool,
