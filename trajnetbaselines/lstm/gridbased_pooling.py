@@ -158,6 +158,9 @@ class GridBasedPooling(torch.nn.Module):
         return grid
 
     def forward(self, hidden_state, obs1, obs2):
+        if not hasattr(self, 'arc'):  # compatibility with methods that did not have this object
+            self.arc = False
+
         ## Make chosen grid
         if self.type_ == 'occupancy':
             grid = self.occupancies(obs1, obs2)
