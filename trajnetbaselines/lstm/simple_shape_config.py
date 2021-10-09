@@ -30,7 +30,7 @@ class ShapeConfigPedDensity(nn.Module):
                 self.default_radius = self.default_angle = None
             self.sides = sorted(values[0])
             self.min_side, self.max_side = self.sides[0], self.sides[-1]
-            self.default_side = (self.max_side - self.min_side) / 2
+            self.default_side = self.min_side + (self.max_side - self.min_side) / 2
         else:
             self.sides = self.min_side = self.max_side = self.default_side = None
             self.radii, self.angles = sorted(values[0]), sorted([a for a in values[1]])
@@ -38,7 +38,7 @@ class ShapeConfigPedDensity(nn.Module):
             self.min_radius, self.max_radius = self.radii[0], self.radii[-1]
             self.min_angle, self.max_angle = self.angles[0], self.angles[-1]
             self.default_radius = self.min_radius + (self.max_radius - self.min_radius) / 2
-            self.default_angle = (self.max_angle - self.min_angle) / 2
+            self.default_angle = self.min_angle + (self.max_angle - self.min_angle) / 2
 
         # extra values that will be properly initialized in other method calls
         self.all_sides = self.all_radii = self.all_angles = None
@@ -142,7 +142,7 @@ class ShapeConfigNeighDist(nn.Module):
                 self.default_radius = self.default_angle = None
             self.sides = sorted(values[0])
             self.min_side, self.max_side = self.sides[0], self.sides[-1]
-            self.default_side = (self.max_side - self.min_side) / 2
+            self.default_side = self.min_side + (self.max_side - self.min_side) / 2
         else:
             self.sides = self.min_side = self.max_side = self.default_side = None
             self.radii, self.angles = sorted(values[0]), sorted([a for a in values[1]])
@@ -150,7 +150,7 @@ class ShapeConfigNeighDist(nn.Module):
             self.min_radius, self.max_radius = self.radii[0], self.radii[-1]
             self.min_angle, self.max_angle = self.angles[0], self.angles[-1]
             self.default_radius = self.min_radius + (self.max_radius - self.min_radius) / 2
-            self.default_angle = (self.max_angle - self.min_angle) / 2
+            self.default_angle = self.min_angle + (self.max_angle - self.min_angle) / 2
 
         # extra values that will be properly initialized in other method calls
         self.all_sides = self.all_radii = self.all_angles = None
@@ -442,7 +442,7 @@ class GrowingShapeUpToMaxPedestrians(nn.Module):
                 self.default_radius = self.default_angle = None
             self.sides = sorted(values[0])
             self.min_side, self.max_side = self.sides[0], self.sides[-1]
-            self.default_side = (self.max_side - self.min_side) / 2
+            self.default_side = self.min_side + (self.max_side - self.min_side) / 2
             raise Exception('TODO Not Implemented Yet')
         else:
             self.sides = self.min_side = self.max_side = self.default_side = None
