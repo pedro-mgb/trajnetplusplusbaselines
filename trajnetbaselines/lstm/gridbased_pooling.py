@@ -1,10 +1,32 @@
 from collections import defaultdict
 import os
+from enum import Enum
 
 import numpy as np
 import matplotlib.pyplot as plt
 
 import torch
+
+
+class PoolingShape(Enum):
+    """
+    Available types of shapes for the Shaped based pooling class
+    - Grid based pooling - Square grid surrounding the pedestrian. Used in models like Social-LSTM.
+    - Arc based pooling - Consider an arc of a certain angle and maximum radius going from the direction where the
+    pedestrian is facing (assumption that it's the gaze direction). The arc will be divided in several portions along
+    the angle and distance.
+    """
+    GRID = 0
+    ARC = 1
+
+
+class ShapeValues:
+    def __init__(self):
+        # For variable grid-based shape
+        self.all_sides = None
+        # For variable arc-based shape
+        self.all_radius, self.all_angles = None, None
+
 
 def one_cold(i, n):
     """Inverse one-hot encoding."""
@@ -80,6 +102,8 @@ class GridBasedPooling(torch.nn.Module):
             ## Encode hidden-dim into latent-dim vector (faster computation)
             self.hidden_dim_encoding = torch.nn.Linear(hidden_dim, latent_dim)
             self.pooling_dim = latent_dim + 2
+
+        self.shape_values = ShapeValues()
 
         ## Final Representation Size
         if out_dim is None:
@@ -158,8 +182,11 @@ class GridBasedPooling(torch.nn.Module):
         return grid
 
     def forward(self, hidden_state, obs1, obs2):
-        if not hasattr(self, 'arc'):  # compatibility with methods that did not have this object
+        # compatibility with older methods that did not have certain attributes
+        if not hasattr(self, 'arc'):
             self.arc = False
+        if not hasattr(self, 'shape_values'):
+            self.shape_values = ShapeValues()
 
         ## Make chosen grid
         if self.type_ == 'occupancy':

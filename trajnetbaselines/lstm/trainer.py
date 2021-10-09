@@ -13,10 +13,13 @@ import numpy as np
 
 import trajnetplusplustools
 
+from trajnetbaselines.lstm.complex_shape_config import ShapeConfigLSTM
+from trajnetbaselines.lstm.simple_shape_config import ShapeConfigPedDensity, ShapeConfigNeighDist, \
+    ArcShapeRadiusConfigVisiblePedDensity, ArcShapeRadiusConfigVisibleNeighDist, GrowingShapeUpToMaxPedestrians
 from .. import augmentation
 from .loss import PredictionLoss, L2Loss
 from .lstm import LSTM, LSTMPredictor, drop_distant
-from .gridbased_pooling import GridBasedPooling
+from .gridbased_pooling import GridBasedPooling, PoolingShape
 from .non_gridbased_pooling import NN_Pooling, HiddenStateMLPPooling, AttentionMLPPooling, DirectionalMLPPooling
 from .non_gridbased_pooling import NN_LSTM, TrajectronPooling, SAttention_fast
 from .more_non_gridbased_pooling import NMMP
@@ -410,14 +413,13 @@ def main(epochs=25):
     parser.add_argument('--variable_shape', action='store_true',
                         help='Do a variable pooling shape, based on the past interactions between pedestrians '
                              '(if \'--pooling_type\' was supplied)')
-    parser.add_argument('--radius_values', type=float, nargs='+', default=[0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0],
+    parser.add_argument('--radius_values', type=float, nargs='+', default=[2, 3, 4, 5, 6, 7, 8],
                         help='List of radius values (units of the scene - metres or pixels) that are possible to use. '
                              'It does not have to be supplied in a particular order.')
-    parser.add_argument('--angle_values', type=float, nargs='+',
-                        default=[45, 60, 75, 90, 105, 120, 135, 150, 165, 180],
+    parser.add_argument('--angle_values', type=float, nargs='+', default=[140],
                         help='List of angle values (degrees) that are possible to use. They should be supplied in '
                              '(0, 360] interval. It does not have to be supplied in a particular order.')
-    parser.add_argument('--cell_side_values', type=float, nargs='+', default=[0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+    parser.add_argument('--cell_side_values', type=float, nargs='+', default=[2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
                         help='List of cell side values (units of the scene - metres or pixels) that are possible to '
                              'use. It does not have to be supplied in a particular order.')
     parser.add_argument('--random_init_shape', action='store_true',
@@ -454,11 +456,11 @@ def main(epochs=25):
                              'Limits of shape provided by the extremities of arguments --radius_values, with fixed '
                              'value for angle via --arc_angle (only applies for arc shape) This cannot be used '
                              'simultaneously with any other variable shape arguments.')
-    parser.add_argument('--min_neigh_dist', default=1, type=float,
+    parser.add_argument('--min_neigh_dist', default=2, type=float,
                         help='Specific to --variable_shape_neigh_dist argument. For the current instant, any case where'
                              ' the mean neighbour distance is smaller or equal to this value will map to the minimum '
                              'shape dimensions provided.')
-    parser.add_argument('--max_neigh_dist', default=6, type=float,
+    parser.add_argument('--max_neigh_dist', default=8, type=float,
                         help='Specific to --variable_shape_neigh_dist argument. For the current instant, any case where'
                              ' the mean neighbour distance is larger or equal to this value will map to the maximum '
                              'shape dimensions provided.')
@@ -544,7 +546,7 @@ def main(epochs=25):
     pretrained_pool = None
 
     # create interaction/pooling modules
-    pool = None
+    pool, shape_config = None, None
     if args.type == 'hiddenstatemlp':
         pool = HiddenStateMLPPooling(hidden_dim=args.hidden_dim, out_dim=args.pool_dim,
                                      mlp_dim_vel=args.vel_dim)
@@ -569,9 +571,11 @@ def main(epochs=25):
                                 out_dim=args.pool_dim, embedding_arch=args.embedding_arch,
                                 constant=args.pool_constant, pretrained_pool_encoder=pretrained_pool,
                                 norm=args.norm, layer_dims=args.layer_dims, latent_dim=args.latent_dim, extra_args=args)
+        shape_config = __get_variable_shape_config__(args, pool)
+
 
     # create forecasting model
-    model = LSTM(pool=pool,
+    model = LSTM(pool=pool, shape_config=shape_config,
                  embedding_dim=args.coordinate_embedding_dim,
                  hidden_dim=args.hidden_dim,
                  goal_flag=args.goals,
@@ -613,6 +617,53 @@ def main(epochs=25):
                       augment_noise=args.augment_noise, col_weight=args.col_weight, col_gamma=args.col_gamma,
                       val_flag=val_flag)
     trainer.loop(train_scenes, val_scenes, train_goals, val_goals, args.output, epochs=args.epochs, start_epoch=start_epoch)
+
+
+def __get_variable_shape_config__(args, module):
+    var_shape_lstm = hasattr(args, 'variable_shape') and args.variable_shape
+    var_shape_ped_density = hasattr(args, 'variable_shape_ped_density') and args.variable_shape_ped_density
+    var_shape_neigh_dist = hasattr(args, 'variable_shape_neigh_dist') and args.variable_shape_neigh_dist
+    var_shape_ped_density_visible = (hasattr(args, 'variable_shape_ped_density_visible') and
+                                     args.variable_shape_ped_density_visible)
+    var_shape_neigh_dist_visible = (hasattr(args, 'variable_shape_neigh_dist_visible') and
+                                    args.variable_shape_neigh_dist_visible)
+    variable_shape_up_to_x_ped = hasattr(args, 'variable_shape_up_to_x_ped') and args.variable_shape_up_to_x_ped
+    if args.type == 'arc':
+        shape = PoolingShape.ARC
+        parameters = [args.radius_values, args.angle_values]
+    else:
+        shape = PoolingShape.GRID
+        parameters = [args.cell_side_values]
+    if not ((var_shape_lstm or var_shape_ped_density or var_shape_neigh_dist or var_shape_ped_density_visible or
+             var_shape_neigh_dist_visible or variable_shape_up_to_x_ped) and shape is not None):
+        return None  # no shape configuration module available
+    random_init_shape = args.random_init_shape if hasattr(args, 'random_init_shape') else False
+    if var_shape_lstm:
+        return ShapeConfigLSTM(module.shape_values, module.out_dim, shape, parameters, embedding_dim=args.embedding_dim,
+                               h_dim=args.lstm_h_dim, activation_on_input_embedding=torch.nn.ReLU(),
+                               dropout=args.dropout, random=random_init_shape)
+    elif var_shape_ped_density:
+        return ShapeConfigPedDensity(module.shape_values, shape, parameters, max_num_ped=args.max_num_peds,
+                                     random=random_init_shape)
+    elif var_shape_neigh_dist:
+        return ShapeConfigNeighDist(module.shape_values, shape, parameters, min_dist=args.min_neigh_dist,
+                                    max_dist=args.max_neigh_dist, random=random_init_shape)
+    elif var_shape_ped_density_visible:
+        # fix the angle to a certain value
+        return ArcShapeRadiusConfigVisiblePedDensity(module.shape_values, shape, [parameters[0], [args.arc_angle]],
+                                                     max_num_ped=args.max_num_peds, random=random_init_shape)
+    elif var_shape_neigh_dist_visible:
+        # fix the angle to a certain value
+        return ArcShapeRadiusConfigVisibleNeighDist(module.shape_values, shape, [parameters[0], [args.arc_angle]],
+                                                    min_dist=args.min_neigh_dist, max_dist=args.max_neigh_dist,
+                                                    random=random_init_shape)
+    elif variable_shape_up_to_x_ped:
+        # fix angle to a certain value if arc shape
+        parameters = [parameters[0], [args.arc_angle]] if shape == PoolingShape.ARC else parameters
+        return GrowingShapeUpToMaxPedestrians(module.shape_values, shape, parameters,
+                                              max_num_ped=args.max_num_peds, random=random_init_shape)
+    # else - should NOT reach this point, unless there is a bug somewhere
+    raise Exception('Variable shape configuration module not found')
 
 
 if __name__ == '__main__':

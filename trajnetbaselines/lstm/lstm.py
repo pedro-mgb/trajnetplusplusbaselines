@@ -7,6 +7,8 @@ import torch
 import trajnetplusplustools
 
 from .modules import Hidden2Normal, InputEmbedding
+from .simple_shape_config import ArcShapeRadiusConfigVisiblePedDensity, ShapeConfigNeighDist, \
+    ArcShapeRadiusConfigVisibleNeighDist, GrowingShapeUpToMaxPedestrians
 
 from .. import augmentation
 from .utils import center_scene
@@ -23,7 +25,8 @@ def drop_distant(xy, r=6.0):
 
 
 class LSTM(torch.nn.Module):
-    def __init__(self, embedding_dim=64, hidden_dim=128, pool=None, pool_to_input=True, goal_dim=None, goal_flag=False):
+    def __init__(self, embedding_dim=64, hidden_dim=128, pool=None, pool_to_input=True, goal_dim=None, goal_flag=False,
+                 shape_config=None):
         """ Initialize the LSTM forecasting model
 
         Attributes
@@ -36,13 +39,15 @@ class LSTM(torch.nn.Module):
             if False, the interaction vector is added to the LSTM hidden-state
         goal_dim : Embedding dimension of the unit vector pointing towards the goal
         goal_flag: Bool
-            if True, the embedded goal vector is concatenated to the input embedding of LSTM 
+            if True, the embedded goal vector is concatenated to the input embedding of LSTM
+        shape_config: for shape-based pooling - a module to vary the pooling shape
         """
 
         super(LSTM, self).__init__()
         self.hidden_dim = hidden_dim
         self.embedding_dim = embedding_dim
         self.pool = pool
+        self.shape_config = shape_config
         self.pool_to_input = pool_to_input
 
         ## Location
@@ -126,6 +131,7 @@ class LSTM(torch.nn.Module):
             for (start, end) in zip(batch_split[:-1], batch_split[1:]):
                 ## Mask for the scene
                 scene_track_mask = track_mask[start:end]
+                indexes_ped = torch.stack([start + i for i, m in enumerate(scene_track_mask) if m])
                 ## Get observations and hidden-state for the scene
                 prev_position = obs1[start:end][scene_track_mask]
                 curr_position = obs2[start:end][scene_track_mask]
@@ -137,8 +143,23 @@ class LSTM(torch.nn.Module):
                 interaction_track_mask[start:end] = track_mask[start:end]
                 self.pool.track_mask = interaction_track_mask
 
+                if self.shape_config is not None:
+                    self.shape_config.update_shape(indexes_ped)
+
                 ## Pool
                 pool_sample = self.pool(curr_hidden_state, prev_position, curr_position)
+
+                #pool_data = torch.cat((pool_data, seq_pool_data), dim=0)
+                if self.shape_config is not None:
+                    # use the shape_config module to compute the new shape pooling parameters for the pooling layer
+                    if isinstance(self.shape_config, ArcShapeRadiusConfigVisiblePedDensity) or \
+                            isinstance(self.shape_config, ShapeConfigNeighDist) or \
+                            isinstance(self.shape_config, ArcShapeRadiusConfigVisibleNeighDist) or \
+                            isinstance(self.shape_config, GrowingShapeUpToMaxPedestrians):
+                        self.shape_config(prev_position, curr_position, indexes_ped)
+                    else:
+                        self.shape_config(pool_sample, indexes_ped)
+
                 batch_pool.append(pool_sample)
 
             pooled = torch.cat(batch_pool)
@@ -191,6 +212,9 @@ class LSTM(torch.nn.Module):
             Predicted positions of pedestrians i.e. absolute positions
         """
 
+        if not hasattr(self, 'shape_config'):
+            self.shape_config = None
+
         assert ((prediction_truth is None) + (n_predict is None)) == 1
         if n_predict is not None:
             # -1 because one prediction is done by the encoder already
@@ -209,6 +233,10 @@ class LSTM(torch.nn.Module):
         ## Reset LSTMs of Interaction Encoders.
         if self.pool is not None:
             self.pool.reset(num_tracks, device=observed.device)
+        seq_start_end = torch.cat([batch_split[:-1].unsqueeze(1), batch_split[1:].unsqueeze(1)], dim=1)
+        if self.shape_config is not None:
+            # reset the information in the shape configuration module
+            self.shape_config.reset(num_tracks, seq_start_end, observed.device)
 
         # list of predictions
         normals = []  # predicted normal parameters for both phases
