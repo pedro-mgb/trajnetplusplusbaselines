@@ -639,9 +639,10 @@ def __get_variable_shape_config__(args, module):
         return None  # no shape configuration module available
     random_init_shape = args.random_init_shape if hasattr(args, 'random_init_shape') else False
     if var_shape_lstm:
-        return ShapeConfigLSTM(module.shape_values, module.out_dim, shape, parameters, embedding_dim=args.embedding_dim,
-                               h_dim=args.lstm_h_dim, activation_on_input_embedding=torch.nn.ReLU(),
-                               dropout=args.dropout, random=random_init_shape)
+        return ShapeConfigLSTM(module.shape_values, module.out_dim, shape, parameters,
+                               embedding_dim=args.coordinate_embedding_dim, h_dim=args.hidden_dim,
+                               activation_on_input_embedding=torch.nn.ReLU(), dropout=args.obs_dropout,
+                               random=random_init_shape)
     elif var_shape_ped_density:
         return ShapeConfigPedDensity(module.shape_values, shape, parameters, max_num_ped=args.max_num_peds,
                                      random=random_init_shape)
